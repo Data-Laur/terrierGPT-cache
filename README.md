@@ -15,15 +15,28 @@ on Amazon Bedrock (Claude Sonnet + Haiku models).
 - **Communication**: Power BI dashboard modeled on URI's "How Hungry is AI?" - student education on model selection (Haiku = ~half the CO₂ of Sonnet)
 
   ## Tech Stack
-## Tech Stack
-- **Python** — core language for vector DB build
-- **ChromaDB** — vector database for response caching
-- **sentence-transformers + PyTorch** — query embedding (all-MiniLM-L6-v2)
-- **AWS Bedrock** — TerrierGPT AI inference (Claude Sonnet 4.6, Haiku 4.5)
-- **Power BI + Power Query** — sustainability dashboard + data pipeline
-- **EPA eGRID + AWS Scope 2 LBM** — carbon quantification methodology
-- **MGHPCC RHOAI** — deployment target (Red Hat OpenShift AI sandbox)
-- **GitHub** — version control
+    ## Core
+**Python 3.9** — core language for vector DB build
+**ChromaDB** — vector database for response caching
+sentence-transformers — query embedding (all-MiniLM-L6-v2, 384-dim)
+**PyTorch** — embedding model inference
+
+  ## API & Deployment
+FastAPI — REST API for cache operations
+uvicorn — ASGI server
+AWS Bedrock — TerrierGPT AI inference (Claude Sonnet 4.6, Haiku 4.5)
+
+    ## Monitoring & Observability
+Prometheus — metrics collection and monitoring
+prometheus_client — instrumentation (cache hit/miss, embedding latency, cache size)
+Analytics & Reporting
+Power BI + Power Query — sustainability dashboard + data pipeline
+EPA eGRID + AWS Scope 2 LBM — carbon quantification methodology
+
+  ## Infrastructure
+MGHPCC RHOAI — deployment target (Red Hat OpenShift AI sandbox)
+Ansible — infrastructure provisioning (systemd service, Prometheus config)
+GitHub — version control
 
 ## Key Finding So Far
 Switching students from Sonnet to Haiku for simple tasks could reduce 

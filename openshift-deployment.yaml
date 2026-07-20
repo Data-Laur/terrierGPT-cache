@@ -1,46 +1,290 @@
+---
+# KServe InferenceService for terrierGPT-cache
+# Deploys FastAPI app + Prometheus metrics on Red Hat OpenShift AI (RHOAI)
+# Requires: KServe operator installed on OpenShift cluster
+#
+# TODO: Customize before deploying:
+# 1. NAMESPACE: Replace "default" with your actual namespace (ask John Byers?)
+# 2. IMAGE: Replace "quay.io/bostonu/terriergpt-cache:latest" with your registry
+# 3. STORAGE_CLASS: Replace "standard" with actual storage class (run: kubectl get storageclass)
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: terriergpt-cache
+  # TODO: Change "default" to your namespace (e.g., "terriergpt-ai", "mghpcc", etc.)
+  namespace: default
+  labels:
+    app: terriergpt-cache
+    version: v1.0.0
+    team: climate-lab
+
+spec:
+  # Service predictor configuration
+  predictor:
+    serviceAccountName: terriergpt-cache-sa
+    containers:
+      - name: terriergpt-cache
+        # TODO: Replace with your actual registry path from quay.io/bostonu/
+        image: quay.io/bostonu/terriergpt-cache:latest
+        imagePullPolicy: Always
+        
+        # Container port configuration
+        ports:
+          - containerPort: 8000
+            name: http
+            protocol: TCP
+          - containerPort: 8001
+            name: metrics
+            protocol: TCP
+        
+        # Environment variables
+        env:
+          - name: MODEL_NAME
+            value: "terriergpt-cache"
+          - name: CHROMA_DB_PATH
+            value: "/data/chroma_db"
+          - name: CACHE_THRESHOLD
+            value: "0.75"
+          - name: LOG_LEVEL
+            value: "INFO"
+          - name: PROMETHEUS_ENABLED
+            value: "true"
+        
+        # Resource requests and limits
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        
+        # Liveness and readiness probes
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        # Volume mounts
+        volumeMounts:
+          - name: cache-storage
+            mountPath: /data/chroma_db
+          - name: config
+            mountPath: /etc/terriergpt-cache
+            readOnly: true
+    
+    # Volumes
+    volumes:
+      - name: cache-storage
+        persistentVolumeClaim:
+          claimName: terriergpt-cache-pvc
+      - name: config
+        configMap:
+          name: terriergpt-cache-config
+
+# PersistentVolumeClaim for ChromaDB storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: terriergpt-cache-pvc
+  # TODO: Change "default" to your namespace
+  namespace: default
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # TODO: Replace "standard" with your cluster's storage class
+  # Run: kubectl get storageclass
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+
+# ConfigMap for application configuration
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: terriergpt-cache-config
+  # TODO: Change "default" to your namespace
   namespace: default
-data:
-  SIMILARITY_THRESHOLD: "0.75"
-  MODEL: "all-MiniLM-L6-v2"
 
+data:
+  config.yaml: |
+    cache:
+      similarity_threshold: 0.75
+      chroma_db_path: /data/chroma_db
+      embedding_model: all-MiniLM-L6-v2
+    
+    api:
+      host: 0.0.0.0
+      port: 8000
+      workers: 4
+      reload: false
+    
+    prometheus:
+      enabled: true
+      port: 8001
+      metrics_path: /metrics
+    
+    bedrock:
+      region: us-east-1
+      models:
+        - claude-3-sonnet
+        - claude-3-haiku
+
+# ServiceAccount for KServe controller
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: terriergpt-cache
+  name: terriergpt-cache-sa
+  # TODO: Change "default" to your namespace
   namespace: default
+
+# Role for accessing ConfigMaps and Secrets
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: terriergpt-cache-role
+  # TODO: Change "default" to your namespace
+  namespace: default
+
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+
+# RoleBinding
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: terriergpt-cache-rolebinding
+  # TODO: Change "default" to your namespace
+  namespace: default
+
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: terriergpt-cache-role
+
+subjects:
+  - kind: ServiceAccount
+    name: terriergpt-cache-sa
+    # TODO: Change "default" to your namespace
+    namespace: default
+
+# ServiceMonitor for Prometheus metrics collection
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: terriergpt-cache-metrics
+  # TODO: Change "default" to your namespace
+  namespace: default
+  labels:
+    app: terriergpt-cache
+    prometheus: kube-prometheus
+
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: terriergpt-cache
-  template:
-    metadata:
-      labels:
-        app: terriergpt-cache
-    spec:
-      containers:
-      - name: cache-service
-        image: quay.io/bostonu/terriergpt-cache:latest
-        imagePullPolicy: Always
-        command: ["python", "cache_cli.py", "stats"]
-        envFrom:
-        - configMapRef:
-            name: terriergpt-cache-config
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "250m"
-          limits:
-            memory: "1Gi"
-            cpu: "500m"
-        volumeMounts:
-        - name: cache-storage
-          mountPath: /app/chroma_db
-      volumes:
-      - name: cache-storage
-        emptyDir: {}
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scrapeTimeout: 10s
+
+# HorizontalPodAutoscaler for automatic scaling
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: terriergpt-cache-hpa
+  # TODO: Change "default" to your namespace
+  namespace: default
+
+spec:
+  scaleTargetRef:
+    apiVersion: serving.kserve.io/v1beta1
+    kind: InferenceService
+    name: terriergpt-cache
+  
+  minReplicas: 2
+  maxReplicas: 5
+  
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+# NetworkPolicy to restrict traffic (optional, enable if needed)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: terriergpt-cache-netpol
+  # TODO: Change "default" to your namespace
+  namespace: default
+
+spec:
+  podSelector:
+    matchLabels:
+      app: terriergpt-cache
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ingress
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8001  # Metrics
+  
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443  # AWS Bedrock
+        - protocol: TCP
+          port: 53   # DNS
