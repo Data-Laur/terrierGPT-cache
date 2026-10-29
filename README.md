@@ -1,6 +1,6 @@
 ## Building an AI-Aware Campus: Using TerrierGPT for a More Sustainable Grid
 
-Boston University Campus Climate Lab · Summer–Fall 2026
+A standalone prototype of a semantic response cache for TerrierGPT, built for the Boston University Campus Climate Lab (Summer to Fall 2026).
 
 ## What We're Building
 
@@ -8,12 +8,31 @@ A framework to measure, reduce, and communicate the environmental
 footprint of TerrierGPT — BU's campus AI chatbot platform running 
 on Amazon Bedrock (Claude Sonnet + Haiku models).
 
+## How it works
+A query comes in. The cache embeds it with all-MiniLM-L6-v2 (384 dimensions).
+ChromaDB finds the closest stored query by cosine similarity.
+If similarity is at or above the threshold (default 0.75), the stored response is returned (a hit). Otherwise nothing is returned (a miss).
+On a miss, the caller is expected to get an answer elsewhere and store it with cache_response.
+
+## What is stored
+
+For every cached entry, the cache stores:
+
+the query text (as the Chroma document)
+the query's embedding
+the full response text (in the cached_response metadata field)
+any extra metadata the caller passes in
+
+Nothing is hashed, anonymized, or tied to a user. There is no user separation, expiry, or consent flag in the code. Any query that clears the threshold can return any stored response.
+
+** Status **
+
 ## The Four Reduction Tracks
 
-- **Response Caching** *(this repo)*: Vector database semantic cache to eliminate redundant Bedrock queries — piloting with Earth House (~20 students, Sept 2026)
+- **Response Caching** *(this repo)*: Vector database semantic cache to reduce redundant Bedrock queries. Prototype only: not deployed and not tested on real queries
 - **Local LLM Inference** *(→ [terrierGPT-ollama-harness](https://github.com/Data-Laur/terrierGPT-ollama-harness) — coming soon)*: Ollama + Pi agent harness to produce the first quantified local-vs-cloud AI energy comparison for a university campus (laptop → MGHPCC → AWS Bedrock three-way comparison)
-- **Model Selection Optimization**: Student education on model switching — Haiku = ~half the CO₂ of Sonnet for simple queries, zero infrastructure changes required
-- **Quantification Baseline**: Real AWS Scope 2 LBM carbon data + EPA eGRID methodology to calculate energy, water, and CO₂ per query by model (Jan–May 2026)
+- **Model Selection Optimization**: Student education on model switching — energy labeling and education so users can pick lighter models for simple queries (see the CCL project report)
+- **Quantification Baseline**: Real AWS Scope 2 LBM carbon data + EPA eGRID methodology (monthly, Jan to May 2026) to estimate energy and CO2 for TerrierGPT overall. Per-model figures are estimates, not measurements (see the CCL report)
 
 ## Tech Stack
 
@@ -26,28 +45,16 @@ on Amazon Bedrock (Claude Sonnet + Haiku models).
 **API & Deployment**
 - **FastAPI** — REST API for cache operations
 - **uvicorn** — ASGI server
-- **AWS Bedrock** — TerrierGPT AI inference (Claude Sonnet 4.6, Haiku 4.5)
+- **AWS Bedrock** — TerrierGPT's inference platform (this repo does not call it)
 
 **Monitoring & Observability**
 - **Prometheus** — metrics collection and monitoring
 - **prometheus_client** — instrumentation (cache hit/miss, embedding latency, cache size)
 
-**Analytics & Reporting**
-- **Power BI + Power Query** — sustainability dashboard + data pipeline
-- **EPA eGRID + AWS Scope 2 LBM** — carbon quantification methodology
-
 **Infrastructure**
-- **MGHPCC RHOAI** — deployment target (Red Hat OpenShift AI sandbox)
+- **MGHPCC RHOAI** — deployment target (intended target, not yet deployed)(Red Hat OpenShift AI sandbox)
 - **KServe** — model serving on OpenShift AI (InferenceService + HPA)
-- **Ansible** — infrastructure provisioning (systemd service, Prometheus config)
 - **GitHub** — version control
-
-## Companion Projects
-
-| Repo | Track | Status |
-|------|-------|--------|
-| [terrierGPT-cache](https://github.com/Data-Laur/terrierGPT-cache) | Response caching (this repo) | ✅ Active |
-| [terrierGPT-ollama-harness](https://github.com/Data-Laur/terrierGPT-ollama-harness) | Local LLM inference (Ollama + Pi) | 🔜 Coming soon |
 
 ## Quick Start: Using the Cache
 
@@ -121,8 +128,7 @@ curl http://localhost:8000/metrics
 Metrics exposed:
 - `cache_hit_total` — Total cache hits
 - `cache_miss_total` — Total cache misses
-- `embedding_latency_seconds` — Query embedding latency (histogram)
-- `bedrock_calls_avoided_total` — Bedrock API calls avoided via cache
+- Time for the full Chroma query, including embedding - Cache hits by model label (counts hits, not measured savings)
 - `cache_size_entries` — Current cache size
 
 ### Command Line (for testing)
@@ -147,7 +153,7 @@ python cache_cli.py stats
 python test_step2_embedding.py
 ```
 
-Expected results:
+Expected results (four example queries, not an evaluation):
 - ✅ Caching works
 - ✅ Identical queries match (similarity 1.0)
 - ✅ Paraphrases match (similarity ~0.83 at 0.75 threshold)
@@ -157,13 +163,13 @@ Expected results:
 
 ## Key Finding So Far
 
-Switching students from Sonnet to Haiku for simple tasks could reduce 
-TerrierGPT's carbon emissions by ~30–50% with zero infrastructure changes.
+None yet for the cache. No hit rate or energy savings has been measured.
 
 ## Design Decisions
 
 **Similarity Threshold (0.75):**
-- Tuned empirically from test results
+
+- Initial value chosen from a few example queries, not tuned on real data
 - Catches legitimate paraphrases ("Where can I find..." vs "Where is...")
 - Rejects unrelated queries
 - Lower = more cache hits but more false positives; higher = fewer hits but better precision
@@ -176,24 +182,25 @@ TerrierGPT's carbon emissions by ~30–50% with zero infrastructure changes.
 **Persistent Storage (ChromaDB):**
 - Local disk storage in `./chroma_db/`
 - Survives restarts, inspectable, no external dependencies
-- Scales to millions of queries
-
+  
 **Metrics & Monitoring:**
 - Prometheus instrumentation at cache operations (query, store, hit/miss)
 - Embedding latency tracked via histogram with 0.01–5.0s buckets
 - Cache size gauge updated on every operation
-- Bedrock API calls avoided tracked by model
-
+- Cache hits tracked by model label
+  
 ## Privacy & Security Model
 
 This is a **standalone prototype**, not integrated with live TerrierGPT production.
 
 **Why standalone?**
 - Professor John Byers (AIDA) identified cache timing attacks: even blinded queries leak info via response speed (cache hit = fast, cache miss = slow API call)
+- The cache stores query text, embeddings, and full responses with no user separation, so a hit can return another user's content
 - BU IS&T will not approve systems inspecting live user queries directly
-- Solution: prototype on MGHPCC RHOAI, test with Earth House pilot using consent-based query logging
-
+- Plan: prototype on MGHPCC RHOAI and test with consented query logs.
+  
 **Deployment Plan:**
+- Original plan (not completed)
 - July–August: Finalize spec, deploy to MGHPCC sandbox
 - Sept 22–Oct 31: Earth House trial (20 students, real query data with consent)
 - Nov–Dec: Measure cache hit rate, energy savings, publish findings
@@ -218,8 +225,8 @@ See `ansible/ANSIBLE_README.md` for details.
 ## Team
 
 Lauren — Data engineering, dashboard, vector DB, calculations, Prometheus instrumentation
-Kiko Yoshihira — Survey design, policy, AWS liaison  
-Dakota Wang — Computer engineering, RHOAI prototype
+Kiko Yoshihira — survey design and policy
+Dakota Wang
 Professor Nathan Phillips — Faculty advisor, ISO New England, MGHPCC board
 
 ## Goal
